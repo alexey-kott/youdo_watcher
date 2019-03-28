@@ -2,3 +2,6 @@ venv/
 .idea/
 config.ini
 __pycache__/
+file.json
+search_queries.txt
+test_bot.py

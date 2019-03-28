@@ -1,0 +1,21 @@
+[GENERAL]
+QUERIES_FILE = search_queries.txt
+DELAY = 5
+
+[BOT]
+TOKEN = 12345678:12345677qwertyuiosdfghjkl
+
+[PROXY]
+HOST = 127.0.0.1
+PORT = 8080
+USERNAME = user
+PASS = password
+
+[REDIS]
+HOST = localhost
+PORT = 6379
+TASKS_DB = 1
+
+[CHANNEL]
+ID = -1001488398765
+
