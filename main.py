@@ -7,11 +7,25 @@ from typing import List, Dict
 import aioredis as aioredis
 from aiohttp import ClientSession, BasicAuth
 from aiogram import Bot
+from bs4 import BeautifulSoup
+
+
+async def get_task_description(task_id: int) -> str:
+    url_request = f'https://youdo.com/t{task_id}'
+    async with ClientSession() as session:
+        async with session.get(url_request, ssl=False) as response:
+            response_page = await response.text()
+            soup = BeautifulSoup(response_page, 'lxml')
+            description = soup.find('span', {'itemprop': 'description'})
+
+            return description.text
 
 
 async def send_message(task: Dict, config: ConfigParser, bot: Bot):
+    description = await get_task_description(task['Id'])
 
-    text = f"{task['Name']}\n" \
+    text = f"*{task['Name']}*\n\n" \
+        f"{description}\n\n" \
         f"Бюджет: *{task['BudgetDescription'] if task['BudgetDescription'] else 'не указан'}*\n\n" \
         f"https://youdo.com/t{task['Id']}"
 
@@ -56,7 +70,6 @@ async def get_tasks(query: str):
 
 
 async def main(bot: Bot, config: ConfigParser):
-
     search_queries = get_search_queries(config)
     while True:
         for query in search_queries:
@@ -70,7 +83,7 @@ if __name__ == "__main__":
 
     PROXY_URL = f"socks5://{config_parser['PROXY']['HOST']}:{config_parser['PROXY']['PORT']}"
     PROXY_AUTH = BasicAuth(login=config_parser['PROXY']['USERNAME'], password=config_parser['PROXY']['PASS'])
-    bot = Bot(config_parser['BOT']['TOKEN'], proxy=PROXY_URL, proxy_auth=PROXY_AUTH)
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main(bot, config_parser))
+    loop.run_until_complete(main(bot=Bot(config_parser['BOT']['TOKEN'], proxy=PROXY_URL, proxy_auth=PROXY_AUTH),
+                                 config=config_parser))
