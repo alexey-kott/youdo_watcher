@@ -5,9 +5,12 @@ from configparser import ConfigParser
 from typing import List, Dict
 
 import aioredis as aioredis
+import requests
+from requests.exceptions import ConnectionError
 from aiohttp import ClientSession, BasicAuth
-from aiogram import Bot
+from aiogram import Bot, Dispatcher, executor
 from bs4 import BeautifulSoup
+
 
 
 async def get_task_description(task_id: int) -> str:
@@ -69,7 +72,11 @@ async def get_tasks(query: str):
             return data['ResultObject']['Items']
 
 
-async def main(bot: Bot, config: ConfigParser):
+async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
+    @dispatcher.message_handler(commands=['ping'])
+    async def ping(message):
+        await message.reply("I'm alive")
+
     search_queries = get_search_queries(config)
     while True:
         for query in search_queries:
@@ -81,9 +88,19 @@ if __name__ == "__main__":
     config_parser = ConfigParser(comment_prefixes='#')
     config_parser.read('config.ini')
 
-    PROXY_URL = f"socks5://{config_parser['PROXY']['HOST']}:{config_parser['PROXY']['PORT']}"
-    PROXY_AUTH = BasicAuth(login=config_parser['PROXY']['USERNAME'], password=config_parser['PROXY']['PASS'])
+    try:
+        PROXY_AUTH = None
+        PROXY_URL = None
+        response = requests.get('https://api.telegram.org')
+    except ConnectionError:
+        PROXY_URL = f"socks5://{config_parser['PROXY']['HOST']}:{config_parser['PROXY']['PORT']}"
+        PROXY_AUTH = BasicAuth(login=config_parser['PROXY']['USERNAME'], password=config_parser['PROXY']['PASS'])
+
+    tg_bot = Bot(config_parser['BOT']['TOKEN'], proxy=PROXY_URL, proxy_auth=PROXY_AUTH)
+    dp = Dispatcher(tg_bot)
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main(bot=Bot(config_parser['BOT']['TOKEN'], proxy=PROXY_URL, proxy_auth=PROXY_AUTH),
+    loop.create_task(dp.start_polling())
+    loop.run_until_complete(main(bot=tg_bot,
+                                 dispatcher=dp,
                                  config=config_parser))
