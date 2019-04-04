@@ -5,3 +5,4 @@ __pycache__/
 file.json
 search_queries.txt
 test_bot.py
+db.sqlite3

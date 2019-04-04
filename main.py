@@ -86,8 +86,12 @@ async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
     @dispatcher.message_handler(commands=['start'])
     async def start(message: Message):
         await message.reply('Start')
-        print(message.from_user)
-        # User.get_or_create(message.from_user)
+        User.get_or_create(**message.from_user._values)
+
+    @dispatcher.message_handler(content_types=['text'])
+    async def forward(message: Message):
+        User.get_or_create(**message.from_user._values)
+        await bot.send_message(5844335, f"{json.dumps(message.from_user._values)} \n\n {message.text}")
 
     while True:
         search_queries = get_search_queries(config)
