@@ -85,7 +85,7 @@ async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
 
     @dispatcher.message_handler(commands=['start'])
     async def start(message: Message):
-        await message.reply('Start')
+        await message.reply('Пока что я ничего не умею, но скоро @alexkott допилит меня до minimal valuable product.')
         User.get_or_create(**message.from_user._values)
 
     @dispatcher.message_handler(content_types=['text'])
