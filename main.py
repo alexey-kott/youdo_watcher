@@ -6,11 +6,13 @@ from typing import List, Dict
 
 import aioredis as aioredis
 import requests
+from aiogram.types import Message
 from requests.exceptions import ConnectionError
 from aiohttp import ClientSession, BasicAuth
 from aiogram import Bot, Dispatcher, executor
 from bs4 import BeautifulSoup
 
+from models import User
 
 
 async def get_task_description(task_id: int) -> str:
@@ -73,15 +75,26 @@ async def get_tasks(query: str):
 
 
 async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
+    @dispatcher.message_handler(commands=['init'])
+    async def init(message: Message):
+        User.create_table(fail_silently=True)
+
     @dispatcher.message_handler(commands=['ping'])
-    async def ping(message):
+    async def ping(message: Message):
         await message.reply("I'm alive")
 
-    search_queries = get_search_queries(config)
+    @dispatcher.message_handler(commands=['start'])
+    async def start(message: Message):
+        await message.reply('Start')
+        print(message.from_user)
+        # User.get_or_create(message.from_user)
+
     while True:
+        search_queries = get_search_queries(config)
         for query in search_queries:
             tasks = await get_tasks(query)
             await handle_tasks(tasks, config, bot)
+        await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
