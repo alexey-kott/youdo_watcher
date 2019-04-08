@@ -1,15 +1,17 @@
 import asyncio
 import json
+import logging
+import sys
 from asyncio import sleep
 from configparser import ConfigParser
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 import aioredis as aioredis
 import requests
 from aiogram.types import Message
 from requests.exceptions import ConnectionError
 from aiohttp import ClientSession, BasicAuth
-from aiogram import Bot, Dispatcher, executor
+from aiogram import Bot, Dispatcher
 from bs4 import BeautifulSoup
 
 from models import User
@@ -48,7 +50,7 @@ async def handle_tasks(tasks: List, config: ConfigParser, bot: Bot):
             if not saved_task:
                 await redis_connection.set(key=task['Id'], value=json.dumps(task))
                 await send_message(task, config, bot)
-                print(task, end='\n\n\n')
+                logger.debug(json.dumps(task))
 
         await sleep(config.getint('GENERAL', 'DELAY'))
 
@@ -69,7 +71,9 @@ async def get_tasks(query: str):
               'onlyB2B': 'false', 'recommended': 'false', 'priceMin': '0', 'sortType': '1', 'categories': 'all'}
     async with ClientSession() as session:
         async with session.get(url_request, params=params, ssl=False) as response:
+            logger.debug(response.real_url)
             data = json.loads(await response.text())
+            logger.debug(data)
 
             return data['ResultObject']['Items']
 
@@ -101,7 +105,47 @@ async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
         await asyncio.sleep(1)
 
 
+def get_logger(level=logging.INFO) -> logging.Logger:
+    app_logger = logging.getLogger()
+
+    logging.basicConfig(level=level,
+                        format='%(asctime)s %(name)-12s %(levelname)-8s %(message)s',
+                        datefmt='%m-%d %H:%M',
+                        filename='logs/default.log')
+
+    logging.getLogger('you_do_bot')
+
+    info_handler = logging.StreamHandler(sys.stdout)
+    info_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    info_handler.setFormatter(formatter)
+    app_logger.addHandler(info_handler)
+
+    debug_handler = logging.FileHandler('logs/debug.log')
+    debug_handler.setLevel(logging.DEBUG)
+    app_logger.addHandler(debug_handler)
+
+    return app_logger
+
+
+def parse_args(args: List[str]) -> Tuple[List[str], Dict[str, str]]:
+    options = []
+    arguments = {}
+    for entry in args:
+        if not entry.startswith('--'):
+            continue
+        if entry.find('=') == -1:
+            options.append(entry.strip('-'))
+        else:
+            key, value = entry.strip('-').split('=')
+            arguments[key] = value
+
+    return options, arguments
+
+
 if __name__ == "__main__":
+    options, args = parse_args(sys.argv)
+    logger = get_logger(args.get('log-level'))
     config_parser = ConfigParser(comment_prefixes='#')
     config_parser.read('config.ini')
 
