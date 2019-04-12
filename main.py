@@ -40,18 +40,16 @@ async def send_message(task: Dict, config: ConfigParser, bot: Bot):
 
 
 async def handle_tasks(tasks: List, config: ConfigParser, bot: Bot):
-    for task in tasks:
+    redis_pool = await aioredis.create_redis_pool(f"redis://{config['REDIS']['HOST']}:{config['REDIS']['PORT']}",
+                                                  db=config.getint('REDIS', 'TASKS_DB'))
 
-        redis_pool = await aioredis.create_redis_pool(f"redis://{config['REDIS']['HOST']}:{config['REDIS']['PORT']}",
-                                                      db=config.getint('REDIS', 'TASKS_DB'))
-
-        with await redis_pool as redis_connection:
+    with await redis_pool as redis_connection:
+        for task in tasks:
             saved_task = await redis_connection.get(task['Id'])
             if not saved_task:
                 await redis_connection.set(key=task['Id'], value=json.dumps(task))
                 await send_message(task, config, bot)
                 logger.debug(json.dumps(task))
-
         await sleep(config.getint('GENERAL', 'DELAY'))
 
 
@@ -91,6 +89,12 @@ async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
     async def start(message: Message):
         await message.reply('Пока что я ничего не умею, но скоро @alexkott допилит меня до minimal valuable product.')
         User.get_or_create(**message.from_user._values)
+
+    @dispatcher.message_handler(commands=['search'])
+    async def start(message: Message):
+        User.get_or_create(**message.from_user._values)
+        tasks = await get_tasks(message.text.replace('/search ', ''))
+        await handle_tasks(tasks, config, bot)
 
     @dispatcher.message_handler(content_types=['text'])
     async def forward(message: Message):
