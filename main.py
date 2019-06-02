@@ -55,7 +55,7 @@ async def handle_tasks(tasks: List, config: ConfigParser, bot: Bot):
 
 def get_search_queries(config: ConfigParser):
     with open(config['GENERAL']['QUERIES_FILE']) as file:
-        return file.readlines()
+        return [line.strip() for line in file.readlines() if line.strip() != '']
 
 
 async def get_tasks(query: str):
