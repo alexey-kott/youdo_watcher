@@ -16,6 +16,8 @@ from bs4 import BeautifulSoup
 
 from models import User
 
+MESSAGE_LENGTH_LIMIT = 4096
+
 
 async def get_task_description(task_id: int) -> str:
     url_request = f'https://youdo.com/t{task_id}'
@@ -28,11 +30,9 @@ async def get_task_description(task_id: int) -> str:
             return description.text
 
 
-async def send_message(task: Dict, config: ConfigParser, bot: Bot):
-    description = await get_task_description(task['Id'])
-
+async def send_message(task: Dict, config: ConfigParser, bot: Bot) -> None:
     text = f"*{task['Name']}*\n\n" \
-        f"{description}\n\n" \
+        f"{task['Description']}\n\n" \
         f"Бюджет: *{task['BudgetDescription'] if task['BudgetDescription'] else 'не указан'}*\n\n" \
         f"https://youdo.com/t{task['Id']}"
 
@@ -48,6 +48,8 @@ async def handle_tasks(tasks: List, config: ConfigParser, bot: Bot):
             saved_task = await redis_connection.get(task['Id'])
             if not saved_task:
                 await redis_connection.set(key=task['Id'], value=json.dumps(task))
+
+                task['Description'] = await get_task_description(task['Id'])
                 await send_message(task, config, bot)
                 logger.debug(json.dumps(task))
         await sleep(config.getint('GENERAL', 'DELAY'))
@@ -60,6 +62,8 @@ def get_search_queries(config: ConfigParser):
 
 async def get_tasks(query: str):
     url_request = 'https://youdo.com/api/tasks/tasks/'
+    if query.strip() == '':
+        raise ValueError('Empty search query')
     params = {'q': query,
               'list': 'all',
               'status': 'opened',
@@ -91,10 +95,25 @@ async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
         User.get_or_create(**message.from_user._values)
 
     @dispatcher.message_handler(commands=['search'])
-    async def start(message: Message):
+    async def search(message: Message):
         User.get_or_create(**message.from_user._values)
         tasks = await get_tasks(message.text.replace('/search ', ''))
-        await handle_tasks(tasks, config, bot)
+
+        message_text = ''
+        for task in tasks:
+            description = await get_task_description(task['Id'])
+            task_text = f"[{task['Name']}](https://youdo.com{task['Url']}), {task['PriceAmount']}₽ ({task['StatusText']})\n " \
+                f"{description}\n\n"
+
+            if len(message_text + task_text) >= MESSAGE_LENGTH_LIMIT:
+                await bot.send_message(message.from_user.id, message_text, parse_mode='Markdown',
+                                       disable_web_page_preview=True)
+                message_text = ''
+
+            message_text += task_text
+
+        await bot.send_message(message.from_user.id, message_text, parse_mode='Markdown',
+                               disable_web_page_preview=True)
 
     @dispatcher.message_handler(content_types=['text'])
     async def forward(message: Message):
