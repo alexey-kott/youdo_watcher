@@ -2,122 +2,132 @@ import asyncio
 import json
 from asyncio import sleep
 from configparser import ConfigParser
-from typing import List, Dict
+from typing import List, Dict, Sequence, Optional
+from logging import getLogger
 
-import aioredis as aioredis
-import requests
+import aioredis
 from aiogram.types import Message
-from requests.exceptions import ConnectionError
 from aiohttp import ClientSession, BasicAuth
 from aiogram import Bot, Dispatcher, executor
-from bs4 import BeautifulSoup
 
 from models import User
 
+logger = getLogger("youdo_watcher")
 
-async def get_task_description(task_id: int) -> str:
-    url_request = f'https://youdo.com/t{task_id}'
+config = ConfigParser(comment_prefixes='#')
+config.read('config.ini')
+
+
+# Initialize bot and dispatcher
+bot = Bot(token=config['BOT']['TOKEN'])
+dp = Dispatcher(bot)
+
+
+async def get_task(task_id: int) -> Optional[Dict]:
+    url_request = 'https://youdo.com/api/tasks/taskmodel/'
+    params = {'taskId': task_id}
     async with ClientSession() as session:
-        async with session.get(url_request, ssl=False) as response:
-            response_page = await response.text()
-            soup = BeautifulSoup(response_page, 'lxml')
-            description = soup.find('span', {'itemprop': 'description'})
+        async with session.get(url_request, params=params, ssl=False) as response:
+            text = await response.text()
+            if response.status == 200:
+                data = json.loads(text)
 
-            return description.text
-
-
-async def send_message(task: Dict, config: ConfigParser, bot: Bot):
-    description = await get_task_description(task['Id'])
-
-    text = f"*{task['Name']}*\n\n" \
-        f"{description}\n\n" \
-        f"Бюджет: *{task['BudgetDescription'] if task['BudgetDescription'] else 'не указан'}*\n\n" \
-        f"https://youdo.com/t{task['Id']}"
-
-    await bot.send_message(config['CHANNEL']['ID'], text=text, parse_mode='Markdown')
+                return data["ResultObject"]["TaskData"]
+            else:
+                logger.error(f"Response code: {response.status}; response text: {text}")
+                await bot.send_message(config["CHANNEL"]["ID"], f"Response code: {response.status}; response text: {text}")
 
 
-async def handle_tasks(tasks: List, config: ConfigParser, bot: Bot):
-    for task in tasks:
+async def handle_tasks(pins: List):
+    redis_pool = await aioredis.create_redis_pool(f"redis://{config['REDIS']['HOST']}:{config['REDIS']['PORT']}",
+                                                  db=config.getint('REDIS', 'TASKS_DB'))
+    for pin in pins:
+        task_id = pin[0]
+        task = await get_task(task_id)
+        saved_task = await redis_pool.get(task_id)
+        if not saved_task:
+            await redis_pool.set(key=task_id, value=json.dumps(task))
 
-        redis_pool = await aioredis.create_redis_pool(f"redis://{config['REDIS']['HOST']}:{config['REDIS']['PORT']}",
-                                                      db=config.getint('REDIS', 'TASKS_DB'))
+            price = task['Price']['PriceInHeader']['StringFormat'] + task['Price']['PriceInHeader']['CurrencyShort']
+            text = f"*{task['Title']}*\n\n" \
+                   f"{task['Description']}\n\n" \
+                   f"Бюджет: *{price} *\n\n" \
+                   f"https://youdo.com/t{task['Id']}"
 
-        with await redis_pool as redis_connection:
-            saved_task = await redis_connection.get(task['Id'])
-            if not saved_task:
-                await redis_connection.set(key=task['Id'], value=json.dumps(task))
-                await send_message(task, config, bot)
-                print(task, end='\n\n\n')
+            await bot.send_message(config['CHANNEL']['ID'], text=text, parse_mode='Markdown')
 
-        await sleep(config.getint('GENERAL', 'DELAY'))
+            print(task, end='\n\n\n')
+
+        await sleep(3)
 
 
-def get_search_queries(config: ConfigParser):
+def get_search_queries() -> Sequence[str]:
     with open(config['GENERAL']['QUERIES_FILE']) as file:
-        return file.readlines()
+        queries = [query.strip() for query in file.readlines()]
+        return queries
 
 
-async def get_tasks(query: str):
-    url_request = 'https://youdo.com/api/tasks/tasks/'
-    params = {'q': query,
+async def get_pins(query_text: str):
+    # pin - список, который возвращает YouDo API. Это список из нескольких
+    # значений: [task_id, lng, lat, ..., ...]. Можно воспринимать пин как точку на карте.
+    url_request = 'https://youdo.com/api/tasks/mappinsclusters/'
+    params = {'q': query_text,
               'list': 'all',
               'status': 'opened',
-              'lat': '55.753215',
-              'lng': '37.622504',
+              'lat': 55.753215,
+              'lng': 37.622504,
+              'neLat': 56.18094240165325,
+              'neLng': 38.6013858359375,
+              'swLat': 55.322191430966846,
+              'swLng': 36.64362216406251,
               'radius': '50', 'page': '1', 'noOffers': 'false', 'onlySbr': 'false',
               'onlyB2B': 'false', 'recommended': 'false', 'priceMin': '0', 'sortType': '1', 'categories': 'all'}
     async with ClientSession() as session:
-        async with session.get(url_request, params=params, ssl=False) as response:
-            data = json.loads(await response.text())
+        async with session.post(url_request, data=params, ssl=False) as response:
+            text = await response.text()
+            if response.status == 200:
+                data = json.loads(text)
 
-            return data['ResultObject']['Items']
+                return data['ResultObject']['Pins']
+            else:
+                logger.error(f"Response code: {response.status}; response text: {text}")
+                await bot.send_message(config['REDIS']['ADMIN'], f"Response code: {response.status}; response text: {text}")
+                return
 
 
-async def main(bot: Bot, dispatcher: Dispatcher, config: ConfigParser):
-    @dispatcher.message_handler(commands=['init'])
-    async def init(message: Message):
-        User.create_table(fail_silently=True)
+@dp.message_handler(commands=['init'])
+async def init(message: Message):
+    User.create_table(fail_silently=True)
 
-    @dispatcher.message_handler(commands=['ping'])
-    async def ping(message: Message):
-        await message.reply("I'm alive")
 
-    @dispatcher.message_handler(commands=['start'])
-    async def start(message: Message):
-        await message.reply('Пока что я ничего не умею, но скоро @alexkott допилит меня до minimal valuable product.')
-        User.get_or_create(**message.from_user._values)
+@dp.message_handler(commands=['ping'])
+async def ping(message: Message):
+    await message.reply("I'm alive")
 
-    @dispatcher.message_handler(content_types=['text'])
-    async def forward(message: Message):
-        User.get_or_create(**message.from_user._values)
-        await bot.send_message(5844335, f"{json.dumps(message.from_user._values)} \n\n {message.text}")
 
+@dp.message_handler(commands=['start'])
+async def start(message: Message):
+    await message.reply('Пока что я ничего не умею, но скоро @alexkott допилит меня до minimal valuable product.')
+    User.get_or_create(**message.from_user._values)
+
+
+@dp.message_handler(content_types=['text'])
+async def forward(message: Message):
+    User.get_or_create(**message.from_user._values)
+    await bot.send_message(config.getint('ADMIN', 'USER_ID'),
+                           f"{json.dumps(message.from_user._values)} \n\n {message.text}")
+
+
+async def observe_tasks():
     while True:
-        search_queries = get_search_queries(config)
+        search_queries = get_search_queries()
         for query in search_queries:
-            tasks = await get_tasks(query)
-            await handle_tasks(tasks, config, bot)
+            pins = await get_pins(query)
+            if pins:
+                await handle_tasks(pins)
         await asyncio.sleep(1)
 
 
 if __name__ == "__main__":
-    config_parser = ConfigParser(comment_prefixes='#')
-    config_parser.read('config.ini')
-
-    try:
-        PROXY_AUTH = None
-        PROXY_URL = None
-        response = requests.get('https://api.telegram.org')
-    except ConnectionError:
-        PROXY_URL = f"socks5://{config_parser['PROXY']['HOST']}:{config_parser['PROXY']['PORT']}"
-        PROXY_AUTH = BasicAuth(login=config_parser['PROXY']['USERNAME'], password=config_parser['PROXY']['PASS'])
-
-    tg_bot = Bot(config_parser['BOT']['TOKEN'], proxy=PROXY_URL, proxy_auth=PROXY_AUTH)
-    dp = Dispatcher(tg_bot)
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(dp.start_polling())
-    loop.run_until_complete(main(bot=tg_bot,
-                                 dispatcher=dp,
-                                 config=config_parser))
+    dp.loop.create_task(observe_tasks())
+    executor.start_polling(dp, skip_updates=True)
