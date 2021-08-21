@@ -60,6 +60,9 @@ async def handle_tasks(pins: List):
 
         await sleep(3)
 
+    redis_pool.close()
+    await redis_pool.wait_closed()
+
 
 def get_search_queries() -> Sequence[str]:
     with open(config['GENERAL']['QUERIES_FILE']) as file:
