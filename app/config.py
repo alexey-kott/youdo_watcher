@@ -8,7 +8,7 @@ class BaseSettings(PydanticBaseSettings):
 
 
 class AppSettings(BaseSettings):
-    QUERIES_FILE: str = "queries.yaml"
+    QUERIES_FILE: str = "queries.txt"
     DELAY: int = 10
 
     model_config = SettingsConfigDict(

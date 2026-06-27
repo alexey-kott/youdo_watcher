@@ -10,5 +10,5 @@ dependencies = [
     "peewee>=4.0.5",
     "playwright>=1.60.0",
     "pydantic-settings>=2.14.1",
-    "redis>=7.4.0",
+    "redis>=8.0.1",
 ]
