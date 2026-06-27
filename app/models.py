@@ -1,4 +1,3 @@
-from aiogram.types import User as AiogramUser
 from peewee import Model, SqliteDatabase, IntegerField, TextField, BooleanField
 
 

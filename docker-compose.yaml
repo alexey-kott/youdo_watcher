@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile:
+        ./Dockerfile
+      args:
+        - ENVIRONMENT=dev
+    restart: on-failure
+    volumes:
+      - .:/code
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    command:
+      ["python", "-m", "app.watcher"]
+    networks:
+      - default
+
+  redis:
+    image: redis:alpine
+    container_name: redis_db
+    command: [
+      "redis-server",
+      "--appendonly", "yes",
+      "--appendfsync", "everysec",
+      "--save", "60", "1000"
+    ]
+    ports:
+      - 6379:6379
+    volumes:
+      - ./data:/data
+    restart: always
+    networks:
+      - default
+

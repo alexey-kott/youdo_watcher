@@ -1,26 +1,31 @@
 import asyncio
 import json
 from asyncio import sleep
-from configparser import ConfigParser
+from http import HTTPMethod
 from typing import List, Dict, Sequence, Optional
 from logging import getLogger
 
-import aioredis
+import redis.asyncio as aioredis
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.types import Message
-from aiohttp import ClientSession, BasicAuth
-from aiogram import Bot, Dispatcher, executor
+from aiohttp import ClientSession
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from playwright.async_api import async_playwright, Route, Request, BrowserContext, Page
 
-from models import User
+from app.config import config
+from app.models import User
+from app.schemas import TaskSchema, TaskListSchema
 
 logger = getLogger("youdo_watcher")
 
-config = ConfigParser(comment_prefixes='#')
-config.read('config.ini')
-
 
 # Initialize bot and dispatcher
-bot = Bot(token=config['BOT']['TOKEN'])
-dp = Dispatcher(bot)
+bot = Bot(token=config.telegram.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+
+
 
 
 async def get_task(task_id: int) -> Optional[Dict]:
@@ -35,7 +40,7 @@ async def get_task(task_id: int) -> Optional[Dict]:
                 return data["ResultObject"]["TaskData"]
             else:
                 logger.error(f"Response code: {response.status}; response text: {text}")
-                await bot.send_message(config["CHANNEL"]["ID"], f"Response code: {response.status}; response text: {text}")
+                await bot.send_message(config.telegram.DEST_CHANNEL_ID, f"Response code: {response.status}; response text: {text}")
 
 
 async def handle_tasks(pins: List):
@@ -46,7 +51,8 @@ async def handle_tasks(pins: List):
         task = await get_task(task_id)
         saved_task = await redis_pool.get(task_id)
         if not saved_task:
-            await redis_pool.set(key=task_id, value=json.dumps(task))
+            async with redis_pool.acquire() as redis_conn:
+                await redis_conn.set(key=task_id, value=json.dumps(task))
 
             price = task['Price']['PriceInHeader']['StringFormat'] + task['Price']['PriceInHeader']['CurrencyShort']
             text = f"*{task['Title']}*\n\n" \
@@ -58,14 +64,12 @@ async def handle_tasks(pins: List):
 
             print(task, end='\n\n\n')
 
-        await sleep(3)
+        await sleep(config.app.DELAY)
 
-    redis_pool.close()
-    await redis_pool.wait_closed()
 
 
 def get_search_queries() -> Sequence[str]:
-    with open(config['GENERAL']['QUERIES_FILE']) as file:
+    with open(config.app.QUERIES_FILE) as file:
         queries = [query.strip() for query in file.readlines()]
         return queries
 
@@ -83,10 +87,10 @@ async def get_pins(query_text: str):
               'neLng': 38.6013858359375,
               'swLat': 55.322191430966846,
               'swLng': 36.64362216406251,
-              'radius': '50', 'page': '1', 'noOffers': 'false', 'onlySbr': 'false',
+              'radius': '50', 'tab': '1', 'noOffers': 'false', 'onlySbr': 'false',
               'onlyB2B': 'false', 'recommended': 'false', 'priceMin': '0', 'sortType': '1', 'categories': 'all'}
     async with ClientSession() as session:
-        async with session.post(url_request, data=params, ssl=False) as response:
+        async with session.post(url_request, data=params, headers=HEADERS, ssl=False) as response:
             text = await response.text()
             if response.status == 200:
                 data = json.loads(text)
@@ -94,43 +98,41 @@ async def get_pins(query_text: str):
                 return data['ResultObject']['Pins']
             else:
                 logger.error(f"Response code: {response.status}; response text: {text}")
-                await bot.send_message(config['REDIS']['ADMIN'], f"Response code: {response.status}; response text: {text}")
-                return
+                # await bot.send_message(config['REDIS']['ADMIN'], f"Response code: {response.status}; response text: {text}")
 
 
-@dp.message_handler(commands=['init'])
+@dp.message(Command('init'))
 async def init(message: Message):
     User.create_table(fail_silently=True)
 
 
-@dp.message_handler(commands=['ping'])
+@dp.message(Command('ping'))
 async def ping(message: Message):
     await message.reply("I'm alive")
 
 
-@dp.message_handler(commands=['start'])
+@dp.message(CommandStart())
 async def start(message: Message):
-    await message.reply('Пока что я ничего не умею, но скоро @alexkott допилит меня до minimal valuable product.')
-    User.get_or_create(**message.from_user._values)
+    await message.reply('Пока что я ничего не умею, но скоро @alexey_kott допилит меня до minimal valuable product.')
+    # User.get_or_create(**message.from_user._values)
 
 
-@dp.message_handler(content_types=['text'])
+@dp.message()
 async def forward(message: Message):
     User.get_or_create(**message.from_user._values)
     await bot.send_message(config.getint('ADMIN', 'USER_ID'),
                            f"{json.dumps(message.from_user._values)} \n\n {message.text}")
 
 
-async def observe_tasks():
-    while True:
-        search_queries = get_search_queries()
-        for query in search_queries:
-            pins = await get_pins(query)
-            if pins:
-                await handle_tasks(pins)
-        await asyncio.sleep(1)
+async def start_bot() -> None:
+    await dp.start_polling(bot, skip_updates=True)
+
+
+async def main():
+    await asyncio.gather(
+        start_bot(),
+    )
 
 
 if __name__ == "__main__":
-    dp.loop.create_task(observe_tasks())
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
